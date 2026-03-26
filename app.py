@@ -368,51 +368,23 @@ def generate_mjpeg_stream(camera_id):
     import time
 
     if camera_id not in MJPEG_STREAMS:
-        MJPEG_STREAMS[camera_id] = {"clients": 0, "last_frame": None}
+        MJPEG_STREAMS[camera_id] = {"clients": 0}
 
     MJPEG_STREAMS[camera_id]["clients"] += 1
-    last_sent_idx = -1
-    consecutive_errors = 0
-
-    buffer = FRAME_BUFFERS.get(camera_id, [])
-    if len(buffer) > 0:
-        last_sent_idx = len(buffer) - 1
+    last_sent = b""
 
     try:
         while True:
-            try:
-                current_buffer = FRAME_BUFFERS.get(camera_id, [])
-                current_len = len(current_buffer)
-
-                if current_len > last_sent_idx + 1:
-                    for i in range(last_sent_idx + 1, current_len):
-                        try:
-                            frame_data = current_buffer[i]
-                            if frame_data:
-                                yield (
-                                    b"--frame\r\n"
-                                    b"Content-Type: image/jpeg\r\n\r\n"
-                                    + frame_data
-                                    + b"\r\n"
-                                )
-                                last_sent_idx = i
-                                consecutive_errors = 0
-                        except Exception:
-                            consecutive_errors += 1
-                elif current_len > 0 and last_sent_idx >= current_len:
-                    last_sent_idx = current_len - 1
-
-                time.sleep(0.03)
-
-                if consecutive_errors > 50:
-                    break
-
-            except GeneratorExit:
-                break
-            except Exception:
-                consecutive_errors += 1
-                time.sleep(0.1)
-
+            frame = LATEST_FRAMES.get(camera_id)
+            if frame and frame != last_sent:
+                try:
+                    yield (
+                        b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
+                    )
+                    last_sent = frame
+                except:
+                    pass
+            time.sleep(0.03)
     finally:
         if camera_id in MJPEG_STREAMS:
             MJPEG_STREAMS[camera_id]["clients"] = max(
