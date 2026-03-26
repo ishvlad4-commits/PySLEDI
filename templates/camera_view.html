@@ -47,7 +47,7 @@
                 
                 <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                     <div class="aspect-video bg-gray-900 relative">
-                        <img id="videoPlayer" src="{{ url_for('video_feed', camera_id=camera.id) }}" alt="Video Stream" class="w-full h-full object-contain">
+                        <img id="videoPlayer" src="{{ url_for('mjpeg_stream', camera_id=camera.id) }}" alt="Video Stream" class="w-full h-full object-contain">
                         <div id="streamIndicator" class="absolute top-4 right-4 {% if camera.is_streaming %}bg-red-500{% else %}bg-gray-500{% endif %} text-white text-xs font-bold px-3 py-1 rounded-full">
                             {% if camera.is_streaming %}● RECORDING{% else %}○ STOPPED{% endif %}
                         </div>
