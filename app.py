@@ -639,54 +639,57 @@ def camera_download_all(api_key):
 
 @socketio.on("connect")
 def handle_connect():
-    print(f"Client connected: {request.sid}")
+    pass
 
 
 @socketio.on("disconnect")
 def handle_disconnect():
-    for cam_id, sid in list(CAMERA_SOCKETS.items()):
-        if sid == request.sid:
-            del CAMERA_SOCKETS[cam_id]
-            leave_room(f"camera_{cam_id}")
-            break
-    print(f"Client disconnected: {request.sid}")
+    pass
 
 
 @socketio.on("esp32_register")
 def handle_esp32_register(data):
-    api_key = data.get("api_key")
-    if not api_key:
-        emit("error", {"message": "Missing api_key"})
-        return
+    try:
+        api_key = data.get("api_key")
+        if not api_key:
+            emit("error", {"message": "Missing api_key"})
+            return
 
-    camera = Camera.query.filter_by(api_key=api_key).first()
-    if not camera:
-        emit("error", {"message": "Invalid api_key"})
-        return
+        camera = Camera.query.filter_by(api_key=api_key).first()
+        if not camera:
+            emit("error", {"message": "Invalid api_key"})
+            return
 
-    CAMERA_SOCKETS[camera.id] = request.sid
-    join_room(f"camera_{camera.id}")
+        CAMERA_SOCKETS[camera.id] = request.sid
+        join_room(f"camera_{camera.id}")
 
-    emit(
-        "registered",
-        {
-            "camera_id": camera.id,
-            "config": camera.get_config(),
-            "stream_auto_mode": camera.stream_auto_mode,
-            "recording_enabled": camera.recording_enabled,
-            "is_streaming": camera.is_streaming,
-        },
-    )
-    print(f"ESP32 registered: camera {camera.id} ({camera.name})")
+        emit(
+            "registered",
+            {
+                "camera_id": camera.id,
+                "config": camera.get_config(),
+                "stream_auto_mode": camera.stream_auto_mode,
+                "recording_enabled": camera.recording_enabled,
+                "is_streaming": camera.is_streaming,
+            },
+        )
+        print(f"ESP32 registered: camera {camera.id} ({camera.name})")
+    except Exception as e:
+        pass
 
 
 @socketio.on("client_watch")
 def handle_client_watch(data):
-    camera_id = data.get("camera_id")
-    if camera_id:
-        join_room(f"camera_{camera_id}")
-        join_room(f"user_{Camera.query.get(camera_id).user_id}")
-        emit("watching", {"camera_id": camera_id})
+    try:
+        camera_id = data.get("camera_id")
+        if camera_id:
+            join_room(f"camera_{camera_id}")
+            camera = Camera.query.get(camera_id)
+            if camera:
+                join_room(f"user_{camera.user_id}")
+            emit("watching", {"camera_id": camera_id})
+    except Exception as e:
+        pass
 
 
 ADMIN_MASTER_KEY = os.environ.get(
