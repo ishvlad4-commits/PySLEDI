@@ -6,8 +6,14 @@ import random
 import urllib.parse
 import requests
 import time
-import threading
 from datetime import datetime, timedelta
+from pathlib import Path
+from dotenv import load_dotenv
+
+env_path = Path(__file__).parent / ".env"
+if env_path.exists():
+    load_dotenv(env_path)
+
 from flask import (
     Flask,
     request,
@@ -34,11 +40,13 @@ FRAME_SEQUENCES = {}
 
 app = Flask(__name__)
 app.secret_key = os.environ.get(
-    "SECRET_KEY", "vigilance-super-secret-key-change-in-prod"
+    "FLASK_SECRET_KEY",
+    os.environ.get("SECRET_KEY", "vigilance-super-secret-key-change-in-prod"),
 )
 app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get(
-    "DATABASE_URL", "sqlite:////var/www/vigilance/vigilance.db"
+    "DATABASE_URL", "sqlite:///vigilance.db"
 )
+app.config["MASTER_KEY"] = os.environ.get("MASTER_KEY", "master_key_sledi_2024")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 db.init_app(app)
@@ -594,7 +602,9 @@ def handle_client_watch(data):
         emit("watching", {"camera_id": camera_id})
 
 
-ADMIN_MASTER_KEY = os.environ.get("ADMIN_MASTER_KEY", "master_key_sledi_2024")
+ADMIN_MASTER_KEY = os.environ.get(
+    "MASTER_KEY", os.environ.get("ADMIN_MASTER_KEY", "master_key_sledi_2024")
+)
 
 
 @app.route("/api/admin/users", methods=["GET", "POST"])
