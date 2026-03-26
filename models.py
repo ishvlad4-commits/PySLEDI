@@ -47,6 +47,7 @@ class Camera(db.Model):
     recording_enabled = db.Column(db.Boolean, default=True)
     stream_auto_mode = db.Column(db.String(20), default="off")
     is_streaming = db.Column(db.Boolean, default=False)
+    vehicle_detection_enabled = db.Column(db.Boolean, default=True)
 
     def get_config(self):
         import json
@@ -93,3 +94,18 @@ class SystemConfig(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
     key_name = db.Column(db.String(50), nullable=False)
     key_value = db.Column(db.String(255))
+
+
+class VehicleDetectionLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    camera_id = db.Column(db.Integer, db.ForeignKey("camera.id"), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class PlateDetectionLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    camera_id = db.Column(db.Integer, db.ForeignKey("camera.id"), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    plate = db.Column(db.String(20), nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)

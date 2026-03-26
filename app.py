@@ -29,8 +29,23 @@ from flask import (
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-from models import db, User, Camera, Blacklist, NotificationTarget, SystemConfig
+from models import (
+    db,
+    User,
+    Camera,
+    Blacklist,
+    NotificationTarget,
+    SystemConfig,
+    VehicleDetectionLog,
+    PlateDetectionLog,
+)
 from sqlalchemy import text
+import threading
+import cv2
+import numpy as np
+
+# Load Haar cascade
+car_cascade = cv2.CascadeClassifier("plate_cascade.xml")
 
 LATEST_FRAMES = {}
 CAMERA_SOCKETS = {}
@@ -133,6 +148,95 @@ def send_alert(user_id, message, plate=None):
                 print(f"Erreur Telegram {target.chat_id}: {e}")
 
 
+def background_detection_loop(app):
+    with app.app_context():
+        while True:
+            for camera_id, frame_bytes in list(LATEST_FRAMES.items()):
+                try:
+                    camera = Camera.query.get(camera_id)
+                    if not camera or not camera.vehicle_detection_enabled:
+                        continue
+
+                    status = CAMERA_STATUS.get(camera_id, {})
+                    last_check = status.get("last_car_check", 0)
+                    now_ts = time.time()
+
+                    if now_ts - last_check < 2.0:
+                        continue
+
+                    CAMERA_STATUS[camera_id]["last_car_check"] = now_ts
+
+                    nparr = np.frombuffer(frame_bytes, np.uint8)
+                    img = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
+                    if img is None:
+                        continue
+
+                    plates = car_cascade.detectMultiScale(
+                        img, scaleFactor=1.1, minNeighbors=4, minSize=(30, 30)
+                    )
+
+                    if len(plates) > 0:
+                        new_vlog = VehicleDetectionLog(
+                            camera_id=camera_id, user_id=camera.user_id
+                        )
+                        db.session.add(new_vlog)
+                        db.session.commit()
+
+                        token = get_plate_recognizer_token(camera.user_id)
+                        if token and token != "YOUR_TOKEN_HERE":
+                            files = {"upload": ("image.jpg", frame_bytes, "image/jpeg")}
+                            headers = {"Authorization": f"Token {token}"}
+
+                            try:
+                                response = requests.post(
+                                    PLATE_RECOGNIZER_URL,
+                                    files=files,
+                                    headers=headers,
+                                    timeout=5,
+                                )
+                                if response.status_code == 200:
+                                    data = response.json()
+                                    if data.get("results"):
+                                        plate_read = data["results"][0]["plate"]
+                                        normalized_read = normalize_plate(plate_read)
+
+                                        new_plog = PlateDetectionLog(
+                                            camera_id=camera_id,
+                                            user_id=camera.user_id,
+                                            plate=normalized_read,
+                                        )
+                                        db.session.add(new_plog)
+                                        db.session.commit()
+
+                                        blacklisted = Blacklist.query.filter_by(
+                                            user_id=camera.user_id,
+                                            plate_normalized=normalized_read,
+                                        ).first()
+
+                                        if blacklisted:
+                                            alert_msg = f"🚨 ALERTE VIGILANCE 🚨\nVéhicule Suspect!\nPlaque: {normalized_read}\nCaméra: {camera.name}\nRaison: {blacklisted.description}"
+                                            send_alert(
+                                                camera.user_id,
+                                                alert_msg,
+                                                plate=normalized_read,
+                                            )
+                                            socketio.emit(
+                                                "threat_alert",
+                                                {
+                                                    "camera_id": camera.id,
+                                                    "camera_name": camera.name,
+                                                    "plate": normalized_read,
+                                                    "reason": blacklisted.description,
+                                                },
+                                                room=f"user_{camera.user_id}",
+                                            )
+                            except Exception as e:
+                                print(f"[BG Det] API Error: {e}")
+                except Exception as e:
+                    print(f"[BG Det] Error: {e}")
+            time.sleep(0.5)
+
+
 @app.before_request
 def create_tables():
     app.before_request_funcs[None].remove(create_tables)
@@ -161,18 +265,16 @@ def create_tables():
             pass
         try:
             conn.execute(
-                text("ALTER TABLE camera ADD COLUMN is_streaming INTEGER DEFAULT 0")
+                text(
+                    "ALTER TABLE camera ADD COLUMN source_type VARCHAR(20) DEFAULT 'esp32'"
+                )
             )
-        except:
-            pass
-        try:
-            conn.execute(text("ALTER TABLE user ADD COLUMN signal_url VARCHAR(512)"))
         except:
             pass
         try:
             conn.execute(
                 text(
-                    "ALTER TABLE camera ADD COLUMN source_type VARCHAR(20) DEFAULT 'esp32'"
+                    "ALTER TABLE camera ADD COLUMN vehicle_detection_enabled INTEGER DEFAULT 1"
                 )
             )
         except:
@@ -437,6 +539,89 @@ def mjpeg_stream(camera_id):
 
 
 @app.route("/api/camera/status/<int:camera_id>")
+def camera_status(camera_id):
+    if "user_id" not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    camera = Camera.query.filter_by(id=camera_id, user_id=session["user_id"]).first()
+    if not camera:
+        return jsonify({"error": "Not found"}), 404
+
+    status = CAMERA_STATUS.get(camera_id, {"connected": False})
+    buffer_size = len(FRAME_BUFFERS.get(camera_id, []))
+
+    return jsonify(
+        {
+            "connected": status.get("connected", False),
+            "last_frame": status.get("last_frame", None),
+            "frame_count": status.get("frame_count", 0),
+            "buffer_frames": buffer_size,
+            "buffer_seconds": buffer_size / 30,
+        }
+    )
+
+
+@app.route("/api/camera/toggle_vehicle_detection/<int:camera_id>", methods=["POST"])
+def toggle_vehicle_detection(camera_id):
+    if "user_id" not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+    camera = Camera.query.filter_by(id=camera_id, user_id=session["user_id"]).first()
+    if not camera:
+        return jsonify({"error": "Not found"}), 404
+
+    data = request.json
+    camera.vehicle_detection_enabled = data.get("enabled", True)
+    db.session.commit()
+    return jsonify({"status": "success", "enabled": camera.vehicle_detection_enabled})
+
+
+@app.route("/api/dashboard/stats")
+def dashboard_stats():
+    if "user_id" not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    user_id = session["user_id"]
+    yesterday = datetime.utcnow() - timedelta(days=1)
+
+    cameras = Camera.query.filter_by(user_id=user_id).all()
+    stats = {}
+    for cam in cameras:
+        v_count = VehicleDetectionLog.query.filter(
+            VehicleDetectionLog.camera_id == cam.id,
+            VehicleDetectionLog.timestamp >= yesterday,
+        ).count()
+        p_count = PlateDetectionLog.query.filter(
+            PlateDetectionLog.camera_id == cam.id,
+            PlateDetectionLog.timestamp >= yesterday,
+        ).count()
+        stats[cam.id] = {"vehicles": v_count, "plates": p_count}
+
+    recent_plates = (
+        PlateDetectionLog.query.filter_by(user_id=user_id)
+        .order_by(PlateDetectionLog.timestamp.desc())
+        .limit(50)
+        .all()
+    )
+    plates_data = []
+    for p in recent_plates:
+        cam_name = (
+            Camera.query.get(p.camera_id).name
+            if Camera.query.get(p.camera_id)
+            else "Unknown"
+        )
+        plates_data.append(
+            {
+                "plate": p.plate,
+                "camera": cam_name,
+                "time": p.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+        )
+
+    return jsonify(
+        {"status": "success", "camera_stats": stats, "recent_plates": plates_data}
+    )
+
+
 def camera_status(camera_id):
     if "user_id" not in session:
         return jsonify({"error": "Unauthorized"}), 401
@@ -1153,6 +1338,11 @@ def del_blacklist(id):
         flash("Plaque effacée.", "success")
     return redirect(url_for("dashboard"))
 
+
+import threading
+
+bg_thread = threading.Thread(target=background_detection_loop, args=(app,), daemon=True)
+bg_thread.start()
 
 if __name__ == "__main__":
     socketio.run(app, debug=True, host="0.0.0.0", port=5000)
