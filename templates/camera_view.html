@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ camera.name }} - СЛЕДИ (SLEDI)</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
     <style>
         body { font-family: 'Inter', sans-serif; }
         .timeline { height: 8px; background: linear-gradient(to right, #3b82f6 0%, #93c5fd 100%); border-radius: 4px; }
@@ -48,14 +47,14 @@
                 <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                     <div class="aspect-video bg-gray-900 relative">
                         <img id="videoPlayer" src="{{ url_for('mjpeg_stream', camera_id=camera.id) }}" alt="Video Stream" class="w-full h-full object-contain">
-                        <div id="loadingOverlay" class="absolute inset-0 flex items-center justify-center bg-black/70 z-10" style="display: none;">
+                        <div id="loadingOverlay" class="absolute inset-0 flex items-center justify-center bg-black/70 z-10">
                             <div class="text-center text-white">
                                 <svg class="w-12 h-12 mx-auto mb-2 animate-spin" fill="none" viewBox="0 0 24 24">
                                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                                     <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                                 </svg>
-                                <p>Loading... / Загрузка...</p>
-                                <p id="bufferInfo" class="text-xs text-gray-400 mt-2">Waiting...</p>
+                                <p>Waiting for video...</p>
+                                <p id="bufferInfo" class="text-xs text-gray-400 mt-2">Connecting...</p>
                             </div>
                         </div>
                         <div id="streamIndicator" class="absolute top-4 right-4 {% if camera.is_streaming %}bg-red-500{% else %}bg-gray-500{% endif %} text-white text-xs font-bold px-3 py-1 rounded-full">
@@ -223,35 +222,41 @@
         const apiKey = "{{ camera.api_key }}";
         let isStreaming = {{ 'true' if camera.is_streaming else 'false' }};
         let bufferLoaded = false;
+        let imgElement;
         
-        const socket = io({ reconnection: true, reconnectionAttempts: 3, reconnectionDelay: 1000 });
+        function initVideo() {
+            imgElement = document.getElementById('videoPlayer');
+            imgElement.onload = function() {
+                bufferLoaded = true;
+                document.getElementById('loadingOverlay').style.display = 'none';
+            };
+            imgElement.onerror = function() {
+                setTimeout(() => {
+                    imgElement.src = '/mjpeg_stream/' + cameraId + '?t=' + Date.now();
+                }, 2000);
+            };
+        }
         
-        socket.on('connect', function() {
-            socket.emit('client_watch', { camera_id: cameraId });
-            addLogEvent('CONNECT', 'Connected to server');
-            checkBufferStatus();
-        });
-        
-        socket.on('disconnect', function() {
-            addLogEvent('DISCONNECT', 'Reconnecting...');
-        });
+        window.addEventListener('load', initVideo);
         
         function checkBufferStatus() {
             fetch('/api/camera/status/' + cameraId)
                 .then(r => r.json())
                 .then(data => {
-                    const loadingOverlay = document.getElementById('loadingOverlay');
                     const bufferInfo = document.getElementById('bufferInfo');
                     
                     if (data.buffer_frames > 0) {
-                        bufferInfo.textContent = data.buffer_frames + ' frames buffered';
-                        if (!bufferLoaded) {
-                            bufferLoaded = true;
-                            loadingOverlay.style.display = 'none';
-                            addLogEvent('BUFFER', data.buffer_frames + ' frames ready');
-                        }
+                        bufferInfo.textContent = data.buffer_frames + ' frames ready';
+                        document.getElementById('statusBadge').className = 'px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700';
+                        document.getElementById('statusBadge').textContent = 'ONLINE';
                     } else {
                         bufferInfo.textContent = 'Waiting for frames...';
+                        document.getElementById('statusBadge').className = 'px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-500';
+                        document.getElementById('statusBadge').textContent = 'OFFLINE';
+                    }
+                })
+                .catch(() => {});
+        }
                     }
                     
                     if (data.connected) {
@@ -264,73 +269,14 @@
         
         setInterval(checkBufferStatus, 3000);
         
-        let imgLoadAttempts = 0;
+        function refreshStream() {
+            const img = document.getElementById('videoPlayer');
+            img.src = '/mjpeg_stream/' + cameraId + '?t=' + Date.now();
+        }
         
-        document.getElementById('videoPlayer').onload = function() {
-            imgLoadAttempts = 0;
-            if (!bufferLoaded) {
-                bufferLoaded = true;
-                document.getElementById('loadingOverlay').style.display = 'none';
-            }
-        };
-        
-        document.getElementById('videoPlayer').onerror = function() {
-            imgLoadAttempts++;
-            if (imgLoadAttempts < 5) {
-                setTimeout(() => {
-                    const img = document.getElementById('videoPlayer');
-                    img.src = img.src.split('?')[0] + '?t=' + Date.now();
-                }, 1000);
-            } else {
-                document.getElementById('loadingOverlay').style.display = 'flex';
-                document.getElementById('bufferInfo').textContent = 'Stream error - no frames';
-            }
-        };
-        
-        socket.on('frame_update', function(data) {
-            if (data.camera_id === cameraId) {
-                if (!bufferLoaded) {
-                    bufferLoaded = true;
-                    document.getElementById('loadingOverlay').style.display = 'none';
-                }
-            }
-        });
-        
-        socket.on('threat_alert', function(data) {
-            if (data.camera_id === cameraId) {
-                addLogEvent('THREAT', 'Plate ' + data.plate + ' detected!');
-                alert('THREAT! Plate: ' + data.plate);
-            }
-        });
-        
-        socket.on('config_update', function(data) {
-            if (data.camera_id === cameraId) {
-                document.getElementById('intervalCapture').value = data.config.interval_capture_ms;
-                document.getElementById('motionThreshold').value = data.config.motion_threshold_percent;
-                document.getElementById('jpegQuality').value = data.config.jpeg_quality;
-                document.getElementById('streamFps').value = data.config.stream_fps;
-                document.getElementById('loopFps').value = data.config.loop_fps;
-                addLogEvent('CONFIG', 'Configuration received');
-            }
-        });
-        
-        socket.on('recording_started', function(data) {
-            if (data.camera_id === cameraId) {
-                isStreaming = true;
-                updateStreamUI();
-                addLogEvent('RECORDING', 'Recording started');
-            }
-        });
-        
-        socket.on('recording_stopped', function(data) {
-            if (data.camera_id === cameraId) {
-                isStreaming = false;
-                updateStreamUI();
-                addLogEvent('RECORDING', 'Recording stopped');
-            }
-        });
+        setInterval(refreshStream, 10000);
 
-        function updateStreamUI() {
+        function toggleStream() {
             const indicator = document.getElementById('streamIndicator');
             const btnText = document.getElementById('btnText');
             const playIcon = document.getElementById('playIcon');
