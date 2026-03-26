@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ camera.name }} - СЛЕДИ (SLEDI)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .timeline { height: 8px; background: linear-gradient(to right, #3b82f6 0%, #93c5fd 100%); border-radius: 4px; }
+        .stream-indicator { animation: pulse 2s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        #videoPlayer { background: #000; }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800">
+
+    <nav class="bg-white shadow-sm border-b border-gray-200 sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center gap-4">
+                    <a href="{{ url_for('dashboard') }}" class="text-gray-500 hover:text-gray-700 flex items-center gap-2">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+                        </svg>
+                        Back / Назад
+                    </a>
+                    <span class="text-gray-300">|</span>
+                    <span class="font-bold text-gray-900">{{ camera.name }}</span>
+                    <span id="statusBadge" class="px-2 py-1 rounded-full text-xs font-medium {% if camera.is_online %}bg-green-100 text-green-700{% else %}bg-gray-100 text-gray-500{% endif %}">
+                        {% if camera.is_online %}ONLINE{% else %}OFFLINE{% endif %}
+                    </span>
+                </div>
+                <div class="flex items-center gap-4">
+                    <span class="text-sm text-gray-500">key: <code class="bg-gray-100 px-2 py-1 rounded">{{ camera.api_key }}</code></span>
+                    <a href="{{ url_for('logout') }}" class="text-sm font-medium text-gray-500 hover:text-red-600">Logout</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            
+            <div class="lg:col-span-2 space-y-6">
+                
+                <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                    <div class="aspect-video bg-gray-900 relative">
+                        <img id="videoPlayer" src="{{ url_for('video_feed', camera_id=camera.id) }}" alt="Video Stream" class="w-full h-full object-contain">
+                        <div id="streamIndicator" class="absolute top-4 right-4 {% if camera.is_streaming %}bg-red-500{% else %}bg-gray-500{% endif %} text-white text-xs font-bold px-3 py-1 rounded-full">
+                            {% if camera.is_streaming %}● RECORDING{% else %}○ STOPPED{% endif %}
+                        </div>
+                        {% if not camera.is_online %}
+                        <div class="absolute inset-0 flex items-center justify-center bg-black/50">
+                            <div class="text-center text-white">
+                                <svg class="w-16 h-16 mx-auto mb-2 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"></path>
+                                </svg>
+                                <p>Camera Offline / Камера не в сети</p>
+                            </div>
+                        </div>
+                        {% endif %}
+                    </div>
+                    
+                    <div class="p-4 border-b border-gray-100">
+                        <div class="timeline-container">
+                            <div class="flex justify-between text-xs text-gray-500 mb-2">
+                                <span>-15 min</span>
+                                <span>-10 min</span>
+                                <span>-5 min</span>
+                                <span>Now</span>
+                            </div>
+                            <div class="timeline relative cursor-pointer" id="timeline">
+                                <div class="absolute inset-y-0 right-0 bg-gray-300/50 rounded-r" style="width: 0%"></div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="p-4 flex flex-wrap gap-3">
+                        <button id="toggleStreamBtn" onclick="toggleStream()" class="flex-1 min-w-[140px] bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-4 rounded-lg transition flex items-center justify-center gap-2">
+                            <svg id="playIcon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                            <span id="btnText">Start Stream</span>
+                        </button>
+                        <button onclick="downloadRecording()" class="flex-1 min-w-[140px] bg-green-600 hover:bg-green-700 text-white font-medium py-3 px-4 rounded-lg transition flex items-center justify-center gap-2">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                            </svg>
+                            Download 15 min
+                        </button>
+                    </div>
+                </div>
+
+                <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-gray-50/50">
+                        <h3 class="font-bold text-gray-900">Event Log / Журнал событий</h3>
+                    </div>
+                    <div id="eventLog" class="p-4 space-y-2 max-h-64 overflow-y-auto text-sm">
+                        <div class="flex items-start gap-3 py-2 border-b border-gray-100">
+                            <span class="text-gray-400 whitespace-nowrap">{{ cameras[0].last_seen.strftime('%H:%M') if cameras[0].last_seen else '--:--' }}</span>
+                            <span class="bg-green-100 text-green-700 px-2 py-0.5 rounded text-xs">CONNECTED</span>
+                            <span class="text-gray-600">Camera connected / Камера подключена</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="space-y-6">
+                
+                <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-gray-50/50">
+                        <h3 class="font-bold text-gray-900">Auto Mode / Авто режим</h3>
+                    </div>
+                    <div class="p-4 space-y-4">
+                        <div class="grid grid-cols-3 gap-2">
+                            <label class="cursor-pointer">
+                                <input type="radio" name="streamMode" value="off" class="sr-only peer" {% if camera.stream_auto_mode == 'off' %}checked{% endif %}>
+                                <div class="border border-gray-200 rounded-lg p-3 text-center peer-checked:border-blue-500 peer-checked:bg-blue-50 transition">
+                                    <div class="text-xs font-medium text-gray-600">OFF</div>
+                                </div>
+                            </label>
+                            <label class="cursor-pointer">
+                                <input type="radio" name="streamMode" value="motion" class="sr-only peer" {% if camera.stream_auto_mode == 'motion' %}checked{% endif %}>
+                                <div class="border border-gray-200 rounded-lg p-3 text-center peer-checked:border-blue-500 peer-checked:bg-blue-50 transition">
+                                    <div class="text-xs font-medium text-gray-600">MOTION</div>
+                                </div>
+                            </label>
+                            <label class="cursor-pointer">
+                                <input type="radio" name="streamMode" value="loop" class="sr-only peer" {% if camera.stream_auto_mode == 'loop' %}checked{% endif %}>
+                                <div class="border border-gray-200 rounded-lg p-3 text-center peer-checked:border-blue-500 peer-checked:bg-blue-50 transition">
+                                    <div class="text-xs font-medium text-gray-600">LOOP</div>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-gray-50/50">
+                        <h3 class="font-bold text-gray-900">Video Settings / Настройки видео</h3>
+                    </div>
+                    <div class="p-4 space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Interval (ms) / Интервал</label>
+                            <input type="number" id="intervalCapture" min="200" max="5000" step="100" value="{{ camera.get_config().interval_capture_ms }}" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                            <input type="range" min="200" max="5000" step="100" value="{{ camera.get_config().interval_capture_ms }}" class="w-full mt-2" onchange="document.getElementById('intervalCapture').value = this.value">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Motion Threshold (%) / Порог движения</label>
+                            <input type="number" id="motionThreshold" min="3" max="50" value="{{ camera.get_config().motion_threshold_percent }}" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                            <input type="range" min="3" max="50" value="{{ camera.get_config().motion_threshold_percent }}" class="w-full mt-2" onchange="document.getElementById('motionThreshold').value = this.value">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">JPEG Quality (%) / Качество</label>
+                            <input type="number" id="jpegQuality" min="10" max="95" value="{{ camera.get_config().jpeg_quality }}" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                            <input type="range" min="10" max="95" value="{{ camera.get_config().jpeg_quality }}" class="w-full mt-2" onchange="document.getElementById('jpegQuality').value = this.value">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Stream FPS / Кадры</label>
+                            <input type="number" id="streamFps" min="1" max="30" value="{{ camera.get_config().stream_fps }}" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Loop FPS / Петля FPS</label>
+                            <input type="number" id="loopFps" min="5" max="30" value="{{ camera.get_config().loop_fps }}" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        
+                        <div class="pt-4 flex gap-2">
+                            <button onclick="saveConfig()" class="flex-1 bg-gray-800 hover:bg-gray-900 text-white font-medium py-2 px-4 rounded-lg transition text-sm">
+                                Save / Сохранить
+                            </button>
+                            <button onclick="pushConfig()" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition text-sm flex items-center justify-center gap-2">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                                </svg>
+                                Push / Отправить
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-gray-50/50">
+                        <h3 class="font-bold text-gray-900">Information / Информация</h3>
+                    </div>
+                    <div class="p-4 space-y-3 text-sm">
+                        <div class="flex justify-between">
+                            <span class="text-gray-500">Last seen / Последний</span>
+                            <span class="font-medium">{{ camera.last_seen.strftime('%Y-%m-%d %H:%M') if camera.last_seen else 'Never' }}</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-500">Latitude / Широта</span>
+                            <span class="font-mono">{{ camera.lat if camera.lat else 'N/A' }}</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-500">Longitude / Долгота</span>
+                            <span class="font-mono">{{ camera.lng if camera.lng else 'N/A' }}</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-gray-500">Speed / Скорость</span>
+                            <span class="font-medium">{{ camera.speed|default('0', true) }} km/h</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const cameraId = {{ camera.id }};
+        const apiKey = "{{ camera.api_key }}";
+        let isStreaming = {{ 'true' if camera.is_streaming else 'false' }};
+        
+        const socket = io();
+        
+        socket.on('connect', function() {
+            socket.emit('client_watch', { camera_id: cameraId });
+            addLogEvent('CONNECT', 'Connected to server');
+        });
+        
+        socket.on('frame_update', function(data) {
+            if (data.camera_id === cameraId) {
+                updateVideo();
+            }
+        });
+        
+        socket.on('threat_alert', function(data) {
+            if (data.camera_id === cameraId) {
+                addLogEvent('THREAT', 'Plate ' + data.plate + ' detected!');
+                alert('THREAT! Plate: ' + data.plate);
+            }
+        });
+        
+        socket.on('config_update', function(data) {
+            if (data.camera_id === cameraId) {
+                document.getElementById('intervalCapture').value = data.config.interval_capture_ms;
+                document.getElementById('motionThreshold').value = data.config.motion_threshold_percent;
+                document.getElementById('jpegQuality').value = data.config.jpeg_quality;
+                document.getElementById('streamFps').value = data.config.stream_fps;
+                document.getElementById('loopFps').value = data.config.loop_fps;
+                addLogEvent('CONFIG', 'Configuration received');
+            }
+        });
+        
+        socket.on('recording_started', function(data) {
+            if (data.camera_id === cameraId) {
+                isStreaming = true;
+                updateStreamUI();
+                addLogEvent('RECORDING', 'Recording started');
+            }
+        });
+        
+        socket.on('recording_stopped', function(data) {
+            if (data.camera_id === cameraId) {
+                isStreaming = false;
+                updateStreamUI();
+                addLogEvent('RECORDING', 'Recording stopped');
+            }
+        });
+
+        function updateStreamUI() {
+            const indicator = document.getElementById('streamIndicator');
+            const btnText = document.getElementById('btnText');
+            const playIcon = document.getElementById('playIcon');
+            
+            if (isStreaming) {
+                indicator.className = 'absolute top-4 right-4 bg-red-500 text-white text-xs font-bold px-3 py-1 rounded-full';
+                indicator.textContent = '● RECORDING';
+                btnText.textContent = 'Stop Stream';
+                playIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"></path>';
+            } else {
+                indicator.className = 'absolute top-4 right-4 bg-gray-500 text-white text-xs font-bold px-3 py-1 rounded-full';
+                indicator.textContent = '○ STOPPED';
+                btnText.textContent = 'Start Stream';
+                playIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>';
+            }
+        }
+        
+        function toggleStream() {
+            fetch('/api/camera/recording/' + apiKey, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: isStreaming ? 'stop' : 'start' })
+            })
+            .then(r => r.json())
+            .then(d => {
+                if (d.status === 'success') {
+                    isStreaming = d.is_streaming;
+                    updateStreamUI();
+                }
+            });
+        }
+        
+        function saveConfig() {
+            const config = {
+                interval_capture_ms: parseInt(document.getElementById('intervalCapture').value),
+                motion_threshold_percent: parseInt(document.getElementById('motionThreshold').value),
+                jpeg_quality: parseInt(document.getElementById('jpegQuality').value),
+                stream_fps: parseInt(document.getElementById('streamFps').value),
+                loop_fps: parseInt(document.getElementById('loopFps').value)
+            };
+            
+            fetch('/api/camera/config/' + apiKey, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ config: config })
+            })
+            .then(r => r.json())
+            .then(d => {
+                if (d.status === 'success') {
+                    addLogEvent('CONFIG', 'Configuration saved');
+                }
+            });
+        }
+        
+        function pushConfig() {
+            saveConfig();
+            setTimeout(() => {
+                socket.emit('push_config', { camera_id: cameraId, api_key: apiKey });
+                addLogEvent('CONFIG', 'Push sent to ESP32');
+            }, 500);
+        }
+        
+        function downloadRecording() {
+            fetch('/api/camera/download/' + apiKey, { method: 'GET' })
+            .then(r => r.json())
+            .then(d => {
+                if (d.status === 'success') {
+                    addLogEvent('DOWNLOAD', 'Download requested');
+                }
+            });
+        }
+        
+        function addLogEvent(type, message) {
+            const log = document.getElementById('eventLog');
+            const now = new Date();
+            const time = now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0') + ':' + now.getSeconds().toString().padStart(2, '0');
+            
+            const colors = {
+                'CONNECT': 'bg-green-100 text-green-700',
+                'RECORDING': 'bg-red-100 text-red-700',
+                'CONFIG': 'bg-blue-100 text-blue-700',
+                'THREAT': 'bg-red-100 text-red-700',
+                'DOWNLOAD': 'bg-purple-100 text-purple-700',
+                'MOTION': 'bg-yellow-100 text-yellow-700'
+            };
+            
+            const div = document.createElement('div');
+            div.className = 'flex items-start gap-3 py-2 border-b border-gray-100';
+            div.innerHTML = `
+                <span class="text-gray-400 whitespace-nowrap">${time}</span>
+                <span class="px-2 py-0.5 rounded text-xs ${colors[type] || 'bg-gray-100 text-gray-700'}">${type}</span>
+                <span class="text-gray-600">${message}</span>
+            `;
+            log.insertBefore(div, log.firstChild);
+        }
+        
+        document.querySelectorAll('input[name="streamMode"]').forEach(radio => {
+            radio.addEventListener('change', function() {
+                fetch('/api/camera/config/' + apiKey, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ stream_auto_mode: this.value })
+                })
+                .then(r => r.json())
+                .then(d => {
+                    if (d.status === 'success') {
+                        addLogEvent('CONFIG', 'Mode: ' + this.value);
+                    }
+                });
+            });
+        });
+        
+        let wsConnected = false;
+        let lastFrameSeq = -1;
+        let currentBlobUrl = null;
+        let isFetching = false;
+        
+        socket.on('connect', () => { wsConnected = true; });
+        
+        socket.on('frame_update', function(data) {
+            if (data.camera_id === cameraId) {
+                fetchNextFrame();
+            }
+        });
+        
+        async function fetchNextFrame() {
+            if (isFetching) return;
+            isFetching = true;
+            
+            try {
+                const resp = await fetch('/video_feed/' + cameraId + '?last_seq=' + lastFrameSeq + '&t=' + Date.now());
+                if (resp.ok) {
+                    const blob = await resp.blob();
+                    const seq = resp.headers.get('X-Frame-Seq');
+                    if (seq) {
+                        lastFrameSeq = parseInt(seq);
+                        const img = document.getElementById('videoPlayer');
+                        if (img) {
+                            if (currentBlobUrl) URL.revokeObjectURL(currentBlobUrl);
+                            currentBlobUrl = URL.createObjectURL(blob);
+                            img.src = currentBlobUrl;
+                        }
+                    }
+                }
+            } catch (e) {}
+            
+            isFetching = false;
+        }
+        
+        setInterval(() => {
+            if (!document.hidden) {
+                fetchNextFrame();
+            }
+        }, 200);
+    </script>
+</body>
+</html>
