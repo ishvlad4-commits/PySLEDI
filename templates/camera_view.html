@@ -46,7 +46,7 @@
                 
                 <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                     <div class="aspect-video bg-gray-900 relative">
-                        <img id="videoPlayer" src="{{ url_for('mjpeg_stream', camera_id=camera.id) }}" alt="Video Stream" class="w-full h-full object-contain">
+                        <img id="videoPlayer" src="{{ url_for('video_feed', camera_id=camera.id) }}?t={{ range(1,100000)|random }}" alt="Video Stream" class="w-full h-full object-contain">
                         <div id="loadingOverlay" class="absolute inset-0 flex items-center justify-center bg-black/70 z-10">
                             <div class="text-center text-white">
                                 <svg class="w-12 h-12 mx-auto mb-2 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -221,60 +221,10 @@
         const cameraId = {{ camera.id }};
         const apiKey = "{{ camera.api_key }}";
         let isStreaming = {{ 'true' if camera.is_streaming else 'false' }};
-        let bufferLoaded = false;
-        let imgElement;
         
-        function initVideo() {
-            imgElement = document.getElementById('videoPlayer');
-            imgElement.onload = function() {
-                bufferLoaded = true;
-                document.getElementById('loadingOverlay').style.display = 'none';
-            };
-            imgElement.onerror = function() {
-                setTimeout(() => {
-                    imgElement.src = '/mjpeg_stream/' + cameraId + '?t=' + Date.now();
-                }, 2000);
-            };
-        }
-        
-        window.addEventListener('load', initVideo);
-        
-        function checkBufferStatus() {
-            fetch('/api/camera/status/' + cameraId)
-                .then(r => r.json())
-                .then(data => {
-                    const bufferInfo = document.getElementById('bufferInfo');
-                    
-                    if (data.buffer_frames > 0) {
-                        bufferInfo.textContent = data.buffer_frames + ' frames ready';
-                        document.getElementById('statusBadge').className = 'px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700';
-                        document.getElementById('statusBadge').textContent = 'ONLINE';
-                    } else {
-                        bufferInfo.textContent = 'Waiting for frames...';
-                        document.getElementById('statusBadge').className = 'px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-500';
-                        document.getElementById('statusBadge').textContent = 'OFFLINE';
-                    }
-                })
-                .catch(() => {});
-        }
-                    }
-                    
-                    if (data.connected) {
-                        document.getElementById('statusBadge').className = 'px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700';
-                        document.getElementById('statusBadge').textContent = 'ONLINE';
-                    }
-                })
-                .catch(() => {});
-        }
-        
-        setInterval(checkBufferStatus, 3000);
-        
-        function refreshStream() {
-            const img = document.getElementById('videoPlayer');
-            img.src = '/mjpeg_stream/' + cameraId + '?t=' + Date.now();
-        }
-        
-        setInterval(refreshStream, 10000);
+        setInterval(function() {
+            document.getElementById('videoPlayer').src = '/video_feed/' + cameraId + '?t=' + new Date().getTime();
+        }, 200);
 
         function toggleStream() {
             const indicator = document.getElementById('streamIndicator');
