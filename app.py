@@ -44,8 +44,7 @@ import threading
 import cv2
 import numpy as np
 
-# Load Haar cascade
-car_cascade = cv2.CascadeClassifier("plate_cascade.xml")
+BG_SUBTRACTORS = {}
 
 LATEST_FRAMES = {}
 CAMERA_SOCKETS = {}
@@ -171,17 +170,28 @@ def background_detection_loop(app):
                     if img is None:
                         continue
 
-                    plates = car_cascade.detectMultiScale(
-                        img, scaleFactor=1.1, minNeighbors=7, minSize=(60, 20)
+                    img = cv2.GaussianBlur(img, (21, 21), 0)
+
+                    if camera_id not in BG_SUBTRACTORS:
+                        BG_SUBTRACTORS[camera_id] = cv2.createBackgroundSubtractorMOG2(
+                            history=500, varThreshold=50, detectShadows=False
+                        )
+
+                    fgmask = BG_SUBTRACTORS[camera_id].apply(img)
+                    kernel = np.ones((5, 5), np.uint8)
+                    fgmask = cv2.dilate(fgmask, kernel, iterations=2)
+
+                    contours, _ = cv2.findContours(
+                        fgmask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
                     )
 
-                    valid_plates = 0
-                    for x, y, w, h in plates:
-                        aspect_ratio = w / float(h)
-                        if 2.0 <= aspect_ratio <= 6.0:
-                            valid_plates += 1
+                    valid_motion = 0
+                    for cnt in contours:
+                        area = cv2.contourArea(cnt)
+                        if area > 8000:
+                            valid_motion += 1
 
-                    if valid_plates > 0:
+                    if valid_motion > 0:
                         new_vlog = VehicleDetectionLog(
                             camera_id=camera_id, user_id=camera.user_id
                         )
