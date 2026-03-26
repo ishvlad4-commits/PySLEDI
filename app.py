@@ -352,6 +352,59 @@ def video_feed(camera_id):
     return "No frame", 404
 
 
+def generate_mjpeg_stream(camera_id):
+    import time
+    import queue
+
+    frame_queue = queue.Queue(maxsize=2)
+    client_sockets = set()
+
+    def frame_receiver():
+        last_frame = None
+        while True:
+            frame = LATEST_FRAMES.get(camera_id)
+            if frame and frame != last_frame:
+                last_frame = frame
+                try:
+                    frame_queue.put(frame, block=False)
+                except queue.Full:
+                    try:
+                        frame_queue.get_nowait()
+                        frame_queue.put(frame, block=False)
+                    except:
+                        pass
+            time.sleep(0.03)
+
+    import threading
+
+    receiver_thread = threading.Thread(target=frame_receiver, daemon=True)
+    receiver_thread.start()
+
+    while True:
+        try:
+            frame_data = frame_queue.get(timeout=5)
+            yield (
+                b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame_data + b"\r\n"
+            )
+        except queue.Empty:
+            continue
+
+
+@app.route("/mjpeg_stream/<int:camera_id>")
+def mjpeg_stream(camera_id):
+    if "user_id" not in session:
+        return "Unauthorized", 401
+
+    camera = Camera.query.filter_by(id=camera_id, user_id=session["user_id"]).first()
+    if not camera:
+        return "Unauthorized", 401
+
+    return Response(
+        generate_mjpeg_stream(camera_id),
+        mimetype="multipart/x-mixed-replace; boundary=frame",
+    )
+
+
 @app.route("/camera/<int:camera_id>/stream.m3u8")
 def camera_stream_m3u8(camera_id):
     if "user_id" not in session:
