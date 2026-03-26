@@ -352,42 +352,35 @@ def video_feed(camera_id):
     return "No frame", 404
 
 
+MJPEG_STREAMS = {}
+
+
 def generate_mjpeg_stream(camera_id):
     import time
-    import queue
 
-    frame_queue = queue.Queue(maxsize=2)
-    client_sockets = set()
+    if camera_id not in MJPEG_STREAMS:
+        MJPEG_STREAMS[camera_id] = {"clients": 0, "last_frame": None}
 
-    def frame_receiver():
-        last_frame = None
+    MJPEG_STREAMS[camera_id]["clients"] += 1
+    last_sent = b""
+
+    try:
         while True:
-            frame = LATEST_FRAMES.get(camera_id)
-            if frame and frame != last_frame:
-                last_frame = frame
-                try:
-                    frame_queue.put(frame, block=False)
-                except queue.Full:
-                    try:
-                        frame_queue.get_nowait()
-                        frame_queue.put(frame, block=False)
-                    except:
-                        pass
-            time.sleep(0.03)
+            frame_data = LATEST_FRAMES.get(camera_id)
 
-    import threading
-
-    receiver_thread = threading.Thread(target=frame_receiver, daemon=True)
-    receiver_thread.start()
-
-    while True:
-        try:
-            frame_data = frame_queue.get(timeout=5)
-            yield (
-                b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame_data + b"\r\n"
+            if frame_data and frame_data != last_sent:
+                last_sent = frame_data
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n" + frame_data + b"\r\n"
+                )
+            else:
+                time.sleep(0.01)
+    finally:
+        if camera_id in MJPEG_STREAMS:
+            MJPEG_STREAMS[camera_id]["clients"] = max(
+                0, MJPEG_STREAMS[camera_id]["clients"] - 1
             )
-        except queue.Empty:
-            continue
 
 
 @app.route("/mjpeg_stream/<int:camera_id>")
