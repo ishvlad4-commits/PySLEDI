@@ -325,9 +325,9 @@ def stream_upload():
                 FRAME_TIMESTAMPS[camera.id] = []
                 FRAME_SEQUENCES[camera.id] = 0
 
-            FRAME_BUFFERS[camera.id].append(frame_data)
-            FRAME_TIMESTAMPS[camera.id].append(now)
             FRAME_SEQUENCES[camera.id] += 1
+            FRAME_BUFFERS[camera.id].append((FRAME_SEQUENCES[camera.id], frame_data))
+            FRAME_TIMESTAMPS[camera.id].append(now)
 
             while len(FRAME_BUFFERS[camera.id]) > BUFFER_SIZE:
                 FRAME_BUFFERS[camera.id].pop(0)
@@ -358,8 +358,6 @@ def video_feed(camera_id):
 
     return "No frame", 404
 
-    return "No frame", 404
-
 
 MJPEG_STREAMS = {}
 
@@ -368,22 +366,26 @@ def generate_mjpeg_stream(camera_id):
     import time
 
     if camera_id not in MJPEG_STREAMS:
-        MJPEG_STREAMS[camera_id] = {"clients": 0}
+        MJPEG_STREAMS[camera_id] = {"clients": 0, "last_seq": 0}
 
     MJPEG_STREAMS[camera_id]["clients"] += 1
-    last_sent = b""
 
     try:
         while True:
-            frame = LATEST_FRAMES.get(camera_id)
-            if frame and frame != last_sent:
-                try:
-                    yield (
-                        b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
-                    )
-                    last_sent = frame
-                except:
-                    pass
+            buffer = FRAME_BUFFERS.get(camera_id, [])
+            if buffer:
+                latest_seq, latest_frame = buffer[-1]
+                last_seq = MJPEG_STREAMS[camera_id]["last_seq"]
+
+                if latest_seq > last_seq:
+                    try:
+                        yield (
+                            b"--frame\r\n"
+                            b"Content-Type: image/jpeg\r\n\r\n" + latest_frame + b"\r\n"
+                        )
+                        MJPEG_STREAMS[camera_id]["last_seq"] = latest_seq
+                    except:
+                        pass
             time.sleep(0.03)
     finally:
         if camera_id in MJPEG_STREAMS:
