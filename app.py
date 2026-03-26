@@ -406,10 +406,14 @@ def mjpeg_stream(camera_id):
     if not camera:
         return "Unauthorized", 401
 
-    return Response(
+    response = Response(
         generate_mjpeg_stream(camera_id),
         mimetype="multipart/x-mixed-replace; boundary=frame",
     )
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 @app.route("/api/camera/status/<int:camera_id>")
