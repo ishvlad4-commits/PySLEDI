@@ -35,8 +35,11 @@ from sqlalchemy import text
 LATEST_FRAMES = {}
 CAMERA_SOCKETS = {}
 FRAME_BUFFERS = {}
-BUFFER_SIZE = 10
+FRAME_TIMESTAMPS = {}
+BUFFER_SIZE = 60
+BUFFER_SECONDS = 3
 FRAME_SEQUENCES = {}
+CAMERA_STATUS = {}
 
 app = Flask(__name__)
 app.secret_key = os.environ.get(
@@ -301,23 +304,32 @@ def stream_upload():
         file = request.files["image"]
         if file and file.filename != "":
             frame_data = file.read()
+            now = datetime.utcnow()
             LATEST_FRAMES[camera.id] = frame_data
+
+            CAMERA_STATUS[camera.id] = {
+                "connected": True,
+                "last_frame": now,
+                "frame_count": CAMERA_STATUS.get(camera.id, {}).get("frame_count", 0)
+                + 1,
+            }
 
             if camera.id not in FRAME_BUFFERS:
                 FRAME_BUFFERS[camera.id] = []
+                FRAME_TIMESTAMPS[camera.id] = []
                 FRAME_SEQUENCES[camera.id] = 0
 
-            FRAME_BUFFERS[camera.id].append(
-                {"data": frame_data, "seq": FRAME_SEQUENCES[camera.id]}
-            )
+            FRAME_BUFFERS[camera.id].append(frame_data)
+            FRAME_TIMESTAMPS[camera.id].append(now)
             FRAME_SEQUENCES[camera.id] += 1
 
-            if len(FRAME_BUFFERS[camera.id]) > BUFFER_SIZE:
+            while len(FRAME_BUFFERS[camera.id]) > BUFFER_SIZE:
                 FRAME_BUFFERS[camera.id].pop(0)
+                FRAME_TIMESTAMPS[camera.id].pop(0)
 
             socketio.emit(
                 "frame_update",
-                {"camera_id": camera.id, "timestamp": datetime.utcnow().isoformat()},
+                {"camera_id": camera.id, "timestamp": now.isoformat()},
                 room=f"camera_{camera.id}",
             )
             return "OK", 200
@@ -362,20 +374,31 @@ def generate_mjpeg_stream(camera_id):
         MJPEG_STREAMS[camera_id] = {"clients": 0, "last_frame": None}
 
     MJPEG_STREAMS[camera_id]["clients"] += 1
-    last_sent = b""
+    last_sent_idx = -1
+
+    buffer = FRAME_BUFFERS.get(camera_id, [])
+    buffer_len = len(buffer)
+
+    if buffer_len > 0:
+        last_sent_idx = buffer_len - 1
 
     try:
         while True:
-            frame_data = LATEST_FRAMES.get(camera_id)
+            current_buffer = FRAME_BUFFERS.get(camera_id, [])
+            current_len = len(current_buffer)
 
-            if frame_data and frame_data != last_sent:
-                last_sent = frame_data
-                yield (
-                    b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n\r\n" + frame_data + b"\r\n"
-                )
-            else:
-                time.sleep(0.01)
+            if current_len > last_sent_idx + 1:
+                for i in range(last_sent_idx + 1, current_len):
+                    frame_data = current_buffer[i]
+                    yield (
+                        b"--frame\r\n"
+                        b"Content-Type: image/jpeg\r\n\r\n" + frame_data + b"\r\n"
+                    )
+                    last_sent_idx = i
+            elif current_len > 0 and last_sent_idx >= current_len:
+                last_sent_idx = current_len - 1
+
+            time.sleep(0.01)
     finally:
         if camera_id in MJPEG_STREAMS:
             MJPEG_STREAMS[camera_id]["clients"] = max(
@@ -395,6 +418,29 @@ def mjpeg_stream(camera_id):
     return Response(
         generate_mjpeg_stream(camera_id),
         mimetype="multipart/x-mixed-replace; boundary=frame",
+    )
+
+
+@app.route("/api/camera/status/<int:camera_id>")
+def camera_status(camera_id):
+    if "user_id" not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    camera = Camera.query.filter_by(id=camera_id, user_id=session["user_id"]).first()
+    if not camera:
+        return jsonify({"error": "Not found"}), 404
+
+    status = CAMERA_STATUS.get(camera_id, {"connected": False})
+    buffer_size = len(FRAME_BUFFERS.get(camera_id, []))
+
+    return jsonify(
+        {
+            "connected": status.get("connected", False),
+            "last_frame": status.get("last_frame", None),
+            "frame_count": status.get("frame_count", 0),
+            "buffer_frames": buffer_size,
+            "buffer_seconds": buffer_size / 30,
+        }
     )
 
 
