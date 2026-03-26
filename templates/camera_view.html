@@ -21,6 +21,8 @@
             font-family: 'Inter', sans-serif; 
             background: linear-gradient(135deg, #f0f4f8 0%, #e2e8f0 100%);
             min-height: 100vh;
+            margin: 0;
+            padding: 0;
         }
         
         .timeline { 
@@ -45,13 +47,14 @@
             align-items: center;
             justify-content: center;
             overflow: hidden;
+            border-radius: 8px;
         }
         
         #videoPlayer {
             width: 100%;
             height: 100%;
             object-fit: contain;
-            display: none;
+            display: block;
         }
         
         .video-placeholder {
@@ -344,6 +347,11 @@
             color: #6b7280;
         }
         
+        .aspect-video {
+            aspect-ratio: 16/9;
+            width: 100%;
+        }
+        
         @media (max-width: 768px) {
             .grid-cols-1-lg\:grid-cols-3 {
                 grid-template-columns: 1fr;
@@ -622,6 +630,8 @@
         let lastFrameTime = 0;
         let frameDelay = 0;
         let isFullscreen = false;
+        let streamSource = null;
+        let streamActive = false;
         
         // DOM Elements
         const videoPlayer = document.getElementById('videoPlayer');
@@ -681,6 +691,19 @@
                     // Restart stream when page becomes visible
                     restartStreaming();
                 }
+            });
+            
+            // Handle video player events
+            videoPlayer.addEventListener('load', function() {
+                console.log('Video loaded');
+                videoPlaceholder.style.display = 'none';
+                videoPlayer.style.display = 'block';
+                updateResolutionInfo();
+            });
+            
+            videoPlayer.addEventListener('error', function(e) {
+                console.error('Video error:', e);
+                handleStreamError();
             });
         }
         
@@ -811,22 +834,18 @@
                 }
             }, 100);
             
-            // Create a new image element for each frame to avoid caching issues
-            const img = new Image();
-            img.crossOrigin = "Anonymous";
-            
             // Set source with timestamp to prevent caching
-            img.src = `/mjpeg_stream/${cameraId}?t=${new Date().getTime()}`;
+            const timestamp = new Date().getTime();
+            videoPlayer.src = `/mjpeg_stream/${cameraId}?t=${timestamp}`;
             
             // Handle successful load
-            img.onload = function() {
+            videoPlayer.onload = function() {
                 clearInterval(progressInterval);
                 videoPlaceholder.style.display = 'none';
                 videoPlayer.style.display = 'block';
-                videoPlayer.src = img.src;
                 
                 // Update resolution info
-                resolutionValue.textContent = `${img.naturalWidth}×${img.naturalHeight}`;
+                updateResolutionInfo();
                 
                 // Start FPS counter
                 startFpsCounter();
@@ -835,10 +854,22 @@
             };
             
             // Handle loading errors
-            img.onerror = function() {
+            videoPlayer.onerror = function() {
                 clearInterval(progressInterval);
                 handleStreamError();
             };
+        }
+        
+        // Update resolution information
+        function updateResolutionInfo() {
+            // Wait for image to load to get dimensions
+            setTimeout(() => {
+                if (videoPlayer.naturalWidth > 0) {
+                    resolutionValue.textContent = `${videoPlayer.naturalWidth}×${videoPlayer.naturalHeight}`;
+                } else {
+                    resolutionValue.textContent = 'Loading...';
+                }
+            }, 100);
         }
         
         // Hide stream and show placeholder
@@ -1015,64 +1046,4 @@
                     document.mozCancelFullScreen();
                 } else if (document.webkitExitFullscreen) {
                     document.webkitExitFullscreen();
-                } else if (document.msExitFullscreen) {
-                    document.msExitFullscreen();
-                }
-                fullscreenBtn.innerHTML = '<i class="fas fa-expand"></i>';
-                isFullscreen = false;
-            }
-        }
-        
-        // Add event to log
-        function addLogEvent(type, message) {
-            const log = document.getElementById('eventLog');
-            const now = new Date();
-            const time = now.getHours().toString().padStart(2, '0') + ':' + 
-                         now.getMinutes().toString().padStart(2, '0') + ':' + 
-                         now.getSeconds().toString().padStart(2, '0');
-            
-            const colors = {
-                'CONNECT': 'bg-green-100 text-green-700',
-                'RECORDING': 'bg-red-100 text-red-700',
-                'CONFIG': 'bg-blue-100 text-blue-700',
-                'THREAT': 'bg-red-100 text-red-700',
-                'DOWNLOAD': 'bg-purple-100 text-purple-700',
-                'MOTION': 'bg-yellow-100 text-yellow-700',
-                'STREAM': 'bg-indigo-100 text-indigo-700',
-                'ERROR': 'bg-red-100 text-red-700',
-                'RETRY': 'bg-orange-100 text-orange-700'
-            };
-            
-            const icons = {
-                'CONNECT': 'fas fa-plug',
-                'RECORDING': 'fas fa-record-vinyl',
-                'CONFIG': 'fas fa-cog',
-                'THREAT': 'fas fa-exclamation-triangle',
-                'DOWNLOAD': 'fas fa-download',
-                'MOTION': 'fas fa-running',
-                'STREAM': 'fas fa-video',
-                'ERROR': 'fas fa-exclamation-circle',
-                'RETRY': 'fas fa-sync-alt'
-            };
-            
-            const div = document.createElement('div');
-            div.className = 'log-entry flex items-start gap-3 py-2 border-b border-gray-100';
-            div.innerHTML = `
-                <span class="text-gray-400 whitespace-nowrap">${time}</span>
-                <span class="px-2 py-0.5 rounded text-xs flex items-center gap-1 ${colors[type] || 'bg-gray-100 text-gray-700'}">
-                    <i class="${icons[type] || 'fas fa-info-circle'}"></i> ${type}
-                </span>
-                <span class="text-gray-600">${message}</span>
-            `;
-            log.insertBefore(div, log.firstChild);
-        }
-        
-        // Update delay value periodically
-        setInterval(() => {
-            // Simulate network delay calculation
-            const delay = Math.floor(Math.random() * 100) + 20;
-            delayValue.textContent = delay;
-        }, 3000);
-    </script>
-</body>
-</html>
+                } else if
