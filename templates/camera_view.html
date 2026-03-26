@@ -46,7 +46,7 @@
                 
                 <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                     <div class="aspect-video bg-gray-900 relative">
-                        <img id="videoPlayer" src="{{ url_for('video_feed', camera_id=camera.id) }}?t={{ range(1,100000)|random }}" alt="Video Stream" class="w-full h-full object-contain">
+                        <img id="videoPlayer" src="{{ url_for('video_feed', camera_id=camera.id) }}" alt="Video Stream" class="w-full h-full object-contain">
                         <div id="loadingOverlay" class="absolute inset-0 flex items-center justify-center bg-black/70 z-10">
                             <div class="text-center text-white">
                                 <svg class="w-12 h-12 mx-auto mb-2 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -221,6 +221,11 @@
         const cameraId = {{ camera.id }};
         const apiKey = "{{ camera.api_key }}";
         let isStreaming = {{ 'true' if camera.is_streaming else 'false' }};
+        
+        var img = document.getElementById('videoPlayer');
+        img.onload = function() {
+            document.getElementById('loadingOverlay').style.display = 'none';
+        };
         
         setInterval(function() {
             document.getElementById('videoPlayer').src = '/video_feed/' + cameraId + '?t=' + new Date().getTime();
