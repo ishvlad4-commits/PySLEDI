@@ -346,20 +346,11 @@ def video_feed(camera_id):
     if not camera:
         return "Unauthorized", 401
 
-    last_seq = request.args.get("last_seq", type=int, default=-1)
-
-    if camera.id in FRAME_BUFFERS and FRAME_BUFFERS[camera.id]:
-        for frame_item in FRAME_BUFFERS[camera.id]:
-            if frame_item["seq"] > last_seq:
-                return Response(
-                    frame_item["data"],
-                    mimetype="image/jpeg",
-                    headers={"X-Frame-Seq": str(frame_item["seq"])},
-                )
-
     frame = LATEST_FRAMES.get(camera_id)
     if frame:
         return Response(frame, mimetype="image/jpeg")
+
+    return "No frame", 404
 
     return "No frame", 404
 
