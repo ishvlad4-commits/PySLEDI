@@ -53,7 +53,13 @@ app.config["MASTER_KEY"] = os.environ.get("MASTER_KEY", "master_key_sledi_2024")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 db.init_app(app)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+socketio = SocketIO(
+    app,
+    cors_allowed_origins="*",
+    async_mode="threading",
+    ping_timeout=30,
+    ping_interval=10,
+)
 
 limiter = Limiter(
     get_remote_address,
