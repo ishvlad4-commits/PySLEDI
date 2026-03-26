@@ -9,7 +9,6 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from dotenv import load_dotenv
-from functools import wraps
 
 env_path = Path(__file__).parent / ".env"
 if env_path.exists():
@@ -32,13 +31,7 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from models import db, User, Camera, Blacklist, NotificationTarget, SystemConfig
 from sqlalchemy import text
-import logging
 
-# Configuration du logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Constantes globales
 LATEST_FRAMES = {}
 CAMERA_SOCKETS = {}
 FRAME_BUFFERS = {}
@@ -47,7 +40,6 @@ BUFFER_SIZE = 60
 BUFFER_SECONDS = 3
 FRAME_SEQUENCES = {}
 CAMERA_STATUS = {}
-MJPEG_STREAMS = {}
 
 app = Flask(__name__)
 app.secret_key = os.environ.get(
@@ -79,24 +71,6 @@ PLATE_RECOGNIZER_URL = os.environ.get(
     "PLATE_RECOGNIZER_URL", "https://api.platerecognizer.com/v1/plate-reader"
 )
 
-# Décorateur pour vérifier l'authentification
-def require_auth(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if "user_id" not in session:
-            return redirect(url_for("login"))
-        return f(*args, **kwargs)
-    return decorated_function
-
-# Décorateur pour vérifier l'authentification admin
-def require_admin_auth(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        key = request.headers.get("X-Master-Key")
-        if not key or key != os.environ.get("MASTER_KEY", "master_key_sledi_2024"):
-            return jsonify({"status": "error", "message": "Unauthorized"}), 401
-        return f(*args, **kwargs)
-    return decorated_function
 
 def get_plate_recognizer_token(user_id):
     config = SystemConfig.query.filter_by(
@@ -113,7 +87,22 @@ def normalize_plate(plate_str):
     return re.sub(r"[^A-Z0-9]", "", str(plate_str).upper())
 
 
-def send_alert(user_id, message):
+def send_alert(user_id, message, plate=None):
+    user = User.query.get(user_id)
+    if user and user.signal_url:
+        try:
+            url = user.signal_url
+            if "{plate}" in url:
+                url = url.replace("{plate}", urllib.parse.quote(plate or ""))
+            elif "=" in url:
+                base, msg_part = url.rsplit("=", 1)
+                url = f"{base}={msg_part}+{urllib.parse.quote(plate or '')}"
+            else:
+                url = f"{url}?text={urllib.parse.quote(message)}"
+            requests.get(url, timeout=3)
+        except Exception as e:
+            print(f"Erreur Signal Webhook: {e}")
+
     targets = NotificationTarget.query.filter_by(user_id=user_id, is_active=True).all()
     encoded_message = urllib.parse.quote(message)
     for target in targets:
@@ -133,7 +122,7 @@ def send_alert(user_id, message):
             try:
                 requests.get(url, timeout=3)
             except Exception as e:
-                logger.error(f"Erreur Signal {phone_display}: {e}")
+                print(f"Erreur Signal {phone_display}: {e}")
 
         elif target.platform == "telegram" and target.bot_token and target.chat_id:
             url = f"https://api.telegram.org/bot{target.bot_token}/sendMessage"
@@ -141,7 +130,7 @@ def send_alert(user_id, message):
             try:
                 requests.post(url, data=data, timeout=3)
             except Exception as e:
-                logger.error(f"Erreur Telegram {target.chat_id}: {e}")
+                print(f"Erreur Telegram {target.chat_id}: {e}")
 
 
 @app.before_request
@@ -173,6 +162,18 @@ def create_tables():
         try:
             conn.execute(
                 text("ALTER TABLE camera ADD COLUMN is_streaming INTEGER DEFAULT 0")
+            )
+        except:
+            pass
+        try:
+            conn.execute(text("ALTER TABLE user ADD COLUMN signal_url VARCHAR(512)"))
+        except:
+            pass
+        try:
+            conn.execute(
+                text(
+                    "ALTER TABLE camera ADD COLUMN source_type VARCHAR(20) DEFAULT 'esp32'"
+                )
             )
         except:
             pass
@@ -218,11 +219,11 @@ def upload_image():
             img.save(buffer, format="JPEG", quality=85)
             buffer.seek(0)
             image_bytes = buffer.getvalue()
-            logger.info(f"[OCR] Image converted to JPEG: {len(image_bytes)} bytes")
+            print(f"[OCR] Image converted to JPEG: {len(image_bytes)} bytes")
         except ImportError:
-            logger.warning("[OCR] Pillow not installed, using raw bytes")
+            print("[OCR] Pillow not installed, using raw bytes")
         except Exception as e:
-            logger.error(f"[OCR] Image conversion error: {e}, using original bytes")
+            print(f"[OCR] Image conversion error: {e}, using original bytes")
 
         files = {"upload": ("image.jpg", io.BytesIO(image_bytes), "image/jpeg")}
         headers = {"Authorization": f"Token {token}"}
@@ -258,7 +259,7 @@ def upload_image():
                 if blacklisted:
                     threat = True
                     alert_msg = f"🚨 ALERTE VIGILANCE 🚨\nVéhicule Suspect!\nPlaque: {normalized_read}\nCaméra: {camera.name}\nRaison: {blacklisted.description}"
-                    send_alert(user_id, alert_msg)
+                    send_alert(user_id, alert_msg, plate=normalized_read)
                     socketio.emit(
                         "threat_alert",
                         {
@@ -279,7 +280,6 @@ def upload_image():
                 ), 200
 
         except requests.exceptions.RequestException as e:
-            logger.error(f"Plate recognition error: {e}")
             return jsonify({"status": "error", "message": "External API Error"}), 502
 
     return jsonify({"status": "error", "message": "Unknown error"}), 500
@@ -352,9 +352,9 @@ def stream_upload():
                 FRAME_TIMESTAMPS[camera.id] = []
                 FRAME_SEQUENCES[camera.id] = 0
 
+            FRAME_SEQUENCES[camera.id] += 1
             FRAME_BUFFERS[camera.id].append(frame_data)
             FRAME_TIMESTAMPS[camera.id].append(now)
-            FRAME_SEQUENCES[camera.id] += 1
 
             while len(FRAME_BUFFERS[camera.id]) > BUFFER_SIZE:
                 FRAME_BUFFERS[camera.id].pop(0)
@@ -386,51 +386,31 @@ def video_feed(camera_id):
     return "No frame", 404
 
 
+MJPEG_STREAMS = {}
+
+
 def generate_mjpeg_stream(camera_id):
-    """Générateur de flux MJPEG avec gestion de buffer"""
     import time
-    
-    # Initialiser le flux si nécessaire
+
     if camera_id not in MJPEG_STREAMS:
-        MJPEG_STREAMS[camera_id] = {"clients": 0, "last_frame": None}
-    
+        MJPEG_STREAMS[camera_id] = {"clients": 0}
+
     MJPEG_STREAMS[camera_id]["clients"] += 1
     last_sent = b""
-    frame_sequence = 0
-    
+
     try:
         while True:
-            # Obtenir la dernière frame disponible
             frame = LATEST_FRAMES.get(camera_id)
-            
-            # Envoyer la frame seulement si elle est différente de la précédente
             if frame and frame != last_sent:
                 try:
-                    # Entête MJPEG standard
                     yield (
-                        b"--frame\r\n"
-                        b"Content-Type: image/jpeg\r\n"
-                        b"X-Frame-Seq: " + str(frame_sequence).encode() + b"\r\n"
-                        b"\r\n" + frame + b"\r\n"
+                        b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
                     )
                     last_sent = frame
-                    frame_sequence += 1
-                    
-                    # Mettre à jour le statut du flux
-                    MJPEG_STREAMS[camera_id]["last_frame"] = datetime.utcnow()
-                except Exception as e:
-                    logger.error(f"MJPEG stream error for camera {camera_id}: {e}")
-                    # En cas d'erreur, attendre un peu avant de réessayer
-                    time.sleep(0.1)
-                    continue
-            
-            # Attendre un court instant avant de vérifier la prochaine frame
-            time.sleep(0.033)  # ~30 FPS maximum
-    except GeneratorExit:
-        # Le client a fermé la connexion
-        logger.info(f"MJPEG stream closed for camera {camera_id}")
+                except:
+                    pass
+            time.sleep(0.03)
     finally:
-        # Nettoyer les ressources
         if camera_id in MJPEG_STREAMS:
             MJPEG_STREAMS[camera_id]["clients"] = max(
                 0, MJPEG_STREAMS[camera_id]["clients"] - 1
@@ -453,7 +433,6 @@ def mjpeg_stream(camera_id):
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
-    response.headers["Connection"] = "close"
     return response
 
 
@@ -468,9 +447,6 @@ def camera_status(camera_id):
 
     status = CAMERA_STATUS.get(camera_id, {"connected": False})
     buffer_size = len(FRAME_BUFFERS.get(camera_id, []))
-    
-    # Calculer le nombre de clients connectés au flux MJPEG
-    mjpeg_clients = MJPEG_STREAMS.get(camera_id, {}).get("clients", 0) if camera_id in MJPEG_STREAMS else 0
 
     return jsonify(
         {
@@ -479,8 +455,6 @@ def camera_status(camera_id):
             "frame_count": status.get("frame_count", 0),
             "buffer_frames": buffer_size,
             "buffer_seconds": buffer_size / 30,
-            "mjpeg_clients": mjpeg_clients,
-            "is_streaming": camera.is_streaming,
         }
     )
 
@@ -512,8 +486,10 @@ def camera_stream_ts(camera_id):
 
 
 @app.route("/api/camera/config/<api_key>", methods=["GET", "POST"])
-@require_auth
 def camera_config(api_key):
+    if "user_id" not in session:
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+
     camera = Camera.query.filter_by(api_key=api_key, user_id=session["user_id"]).first()
     if not camera:
         return jsonify({"status": "error", "message": "Camera not found"}), 404
@@ -557,8 +533,10 @@ def camera_config(api_key):
 
 
 @app.route("/api/camera/recording/<api_key>", methods=["POST"])
-@require_auth
 def camera_recording(api_key):
+    if "user_id" not in session:
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+
     camera = Camera.query.filter_by(api_key=api_key, user_id=session["user_id"]).first()
     if not camera:
         return jsonify({"status": "error", "message": "Camera not found"}), 404
@@ -582,8 +560,10 @@ def camera_recording(api_key):
 
 
 @app.route("/api/camera/fragments/<api_key>", methods=["GET"])
-@require_auth
 def camera_fragments(api_key):
+    if "user_id" not in session:
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+
     camera = Camera.query.filter_by(api_key=api_key, user_id=session["user_id"]).first()
     if not camera:
         return jsonify({"status": "error", "message": "Camera not found"}), 404
@@ -610,8 +590,10 @@ def camera_fragments(api_key):
 
 
 @app.route("/api/camera/download/<api_key>", methods=["GET"])
-@require_auth
 def camera_download(api_key):
+    if "user_id" not in session:
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+
     camera = Camera.query.filter_by(api_key=api_key, user_id=session["user_id"]).first()
     if not camera:
         return jsonify({"status": "error", "message": "Camera not found"}), 404
@@ -628,8 +610,10 @@ def camera_download(api_key):
 
 
 @app.route("/api/camera/download/<api_key>/<int:fragment_id>", methods=["GET"])
-@require_auth
 def camera_fragment(api_key, fragment_id):
+    if "user_id" not in session:
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+
     camera = Camera.query.filter_by(api_key=api_key, user_id=session["user_id"]).first()
     if not camera:
         return jsonify({"status": "error", "message": "Camera not found"}), 404
@@ -645,8 +629,10 @@ def camera_fragment(api_key, fragment_id):
 
 
 @app.route("/api/camera/download/<api_key>/all", methods=["GET"])
-@require_auth
 def camera_download_all(api_key):
+    if "user_id" not in session:
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+
     camera = Camera.query.filter_by(api_key=api_key, user_id=session["user_id"]).first()
     if not camera:
         return jsonify({"status": "error", "message": "Camera not found"}), 404
@@ -673,12 +659,12 @@ def camera_download_all(api_key):
 
 @socketio.on("connect")
 def handle_connect():
-    logger.info(f"Client connected: {request.sid}")
+    pass
 
 
 @socketio.on("disconnect")
 def handle_disconnect():
-    logger.info(f"Client disconnected: {request.sid}")
+    pass
 
 
 @socketio.on("esp32_register")
@@ -707,9 +693,9 @@ def handle_esp32_register(data):
                 "is_streaming": camera.is_streaming,
             },
         )
-        logger.info(f"ESP32 registered: camera {camera.id} ({camera.name})")
+        print(f"ESP32 registered: camera {camera.id} ({camera.name})")
     except Exception as e:
-        logger.error(f"ESP32 registration error: {e}")
+        pass
 
 
 @socketio.on("client_watch")
@@ -723,7 +709,7 @@ def handle_client_watch(data):
                 join_room(f"user_{camera.user_id}")
             emit("watching", {"camera_id": camera_id})
     except Exception as e:
-        logger.error(f"Client watch error: {e}")
+        pass
 
 
 ADMIN_MASTER_KEY = os.environ.get(
@@ -733,8 +719,11 @@ ADMIN_MASTER_KEY = os.environ.get(
 
 @app.route("/api/admin/users", methods=["GET", "POST"])
 @limiter.limit("30 per minute")
-@require_admin_auth
 def api_admin_users():
+    key = request.headers.get("X-Master-Key")
+    if not key or key != ADMIN_MASTER_KEY:
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+
     if request.method == "GET":
         users = User.query.all()
         users_list = [
@@ -788,8 +777,11 @@ def api_admin_users():
 
 @app.route("/api/admin/users/<username>", methods=["DELETE"])
 @limiter.limit("30 per minute")
-@require_admin_auth
 def api_admin_user_delete(username):
+    key = request.headers.get("X-Master-Key")
+    if not key or key != ADMIN_MASTER_KEY:
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+
     user = User.query.filter_by(username=username).first()
     if not user:
         return jsonify({"status": "error", "message": "User not found"}), 404
@@ -801,8 +793,11 @@ def api_admin_user_delete(username):
 
 @app.route("/api/admin/users/<username>/subscription", methods=["POST"])
 @limiter.limit("30 per minute")
-@require_admin_auth
 def api_admin_user_sub(username):
+    key = request.headers.get("X-Master-Key")
+    if not key or key != ADMIN_MASTER_KEY:
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+
     user = User.query.filter_by(username=username).first()
     if not user:
         return jsonify({"status": "error", "message": "User not found"}), 404
@@ -860,13 +855,17 @@ def logout():
 
 
 @app.route("/dashboard", methods=["GET"])
-@require_auth
 def dashboard():
+    if "user_id" not in session:
+        return redirect(url_for("login"))
+
     user_id = session["user_id"]
     cameras = Camera.query.filter_by(user_id=user_id).all()
     targets = NotificationTarget.query.filter_by(user_id=user_id).all()
     blacklist = Blacklist.query.filter_by(user_id=user_id).all()
     pr_token = get_plate_recognizer_token(user_id)
+    user = User.query.get(user_id)
+    signal_url = user.signal_url if user else None
 
     now = datetime.utcnow()
     for cam in cameras:
@@ -881,12 +880,15 @@ def dashboard():
         targets=targets,
         blacklist=blacklist,
         pr_token=pr_token,
+        signal_url=signal_url,
     )
 
 
 @app.route("/camera/<int:camera_id>", methods=["GET"])
-@require_auth
 def camera_view(camera_id):
+    if "user_id" not in session:
+        return redirect(url_for("login"))
+
     camera = Camera.query.filter_by(id=camera_id, user_id=session["user_id"]).first()
     if not camera:
         flash("Caméra non trouvée.", "error")
@@ -905,8 +907,9 @@ def camera_view(camera_id):
 
 
 @app.route("/dashboard/update_config", methods=["POST"])
-@require_auth
 def update_config():
+    if "user_id" not in session:
+        return redirect(url_for("login"))
     user_id = session["user_id"]
 
     token = request.form.get("pr_token")
@@ -928,8 +931,10 @@ def update_config():
 
 
 @app.route("/dashboard/update_camera_gps/<int:camera_id>", methods=["POST"])
-@require_auth
 def update_camera_gps(camera_id):
+    if "user_id" not in session:
+        return redirect(url_for("login"))
+
     camera = Camera.query.filter_by(id=camera_id, user_id=session["user_id"]).first()
     if not camera:
         flash("Caméra non trouvée.", "error")
@@ -953,8 +958,91 @@ def update_camera_gps(camera_id):
 
 
 @app.route("/dashboard/add_target", methods=["POST"])
-@require_auth
 def add_target():
+    if "user_id" not in session:
+        return redirect(url_for("login"))
+    user_id = session["user_id"]
+
+    name = request.form.get("name")
+    platform = request.form.get("platform")
+
+    if name and platform:
+        new_target = NotificationTarget(user_id=user_id, name=name, platform=platform)
+        if platform == "signal":
+            signal_url = request.form.get("signal_url")
+            if signal_url:
+                new_target.api_key = signal_url
+            else:
+                new_target.phone_number = request.form.get("phone")
+                new_target.api_key = request.form.get("signal_api_key")
+        elif platform == "telegram":
+            new_target.bot_token = request.form.get("bot_token")
+            new_target.chat_id = request.form.get("chat_id")
+
+        db.session.add(new_target)
+        db.session.commit()
+        flash("Canal de notification ajouté.", "success")
+
+    return redirect(url_for("dashboard"))
+
+
+@app.route("/dashboard/update_signal_url", methods=["POST"])
+def update_signal_url():
+    if "user_id" not in session:
+        return redirect(url_for("login"))
+    user_id = session["user_id"]
+    signal_url = request.form.get("signal_url")
+
+    user = User.query.get(user_id)
+    if user:
+        user.signal_url = signal_url if signal_url else None
+        db.session.commit()
+        flash("Signal webhook URL updated.", "success")
+
+    return redirect(url_for("dashboard"))
+
+
+@app.route("/add_webcam", methods=["GET"])
+def add_webcam():
+    if "user_id" not in session:
+        return redirect(url_for("login"))
+    return render_template("add_webcam.html", username=session["username"])
+
+
+@app.route("/api/webcam/create", methods=["POST"])
+def api_webcam_create():
+    if "user_id" not in session:
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+    user_id = session["user_id"]
+    data = request.json or {}
+    name = data.get("name")
+
+    if not name:
+        return jsonify({"status": "error", "message": "Camera name required"}), 400
+
+    import secrets
+
+    api_key = secrets.token_hex(16)
+
+    new_cam = Camera(user_id=user_id, name=name, api_key=api_key, source_type="webcam")
+    db.session.add(new_cam)
+    db.session.commit()
+
+    return jsonify(
+        {
+            "status": "success",
+            "camera": {
+                "id": new_cam.id,
+                "name": new_cam.name,
+                "api_key": new_cam.api_key,
+            },
+        }
+    ), 201
+
+
+def add_target():
+    if "user_id" not in session:
+        return redirect(url_for("login"))
     user_id = session["user_id"]
 
     name = request.form.get("name")
@@ -981,8 +1069,9 @@ def add_target():
 
 
 @app.route("/dashboard/add_camera", methods=["POST"])
-@require_auth
 def add_camera():
+    if "user_id" not in session:
+        return redirect(url_for("login"))
     user_id = session["user_id"]
 
     name = request.form.get("name")
@@ -1001,8 +1090,9 @@ def add_camera():
 
 
 @app.route("/dashboard/add_blacklist", methods=["POST"])
-@require_auth
 def add_blacklist():
+    if "user_id" not in session:
+        return redirect(url_for("login"))
     user_id = session["user_id"]
 
     plate = request.form.get("plate")
@@ -1027,8 +1117,9 @@ def add_blacklist():
 
 
 @app.route("/dashboard/del_camera/<int:id>", methods=["POST"])
-@require_auth
 def del_camera(id):
+    if "user_id" not in session:
+        return redirect(url_for("login"))
     cam = Camera.query.filter_by(id=id, user_id=session["user_id"]).first()
     if cam:
         db.session.delete(cam)
@@ -1038,8 +1129,9 @@ def del_camera(id):
 
 
 @app.route("/dashboard/del_target/<int:id>", methods=["POST"])
-@require_auth
 def del_target(id):
+    if "user_id" not in session:
+        return redirect(url_for("login"))
     target = NotificationTarget.query.filter_by(
         id=id, user_id=session["user_id"]
     ).first()
@@ -1051,8 +1143,9 @@ def del_target(id):
 
 
 @app.route("/dashboard/del_blacklist/<int:id>", methods=["POST"])
-@require_auth
 def del_blacklist(id):
+    if "user_id" not in session:
+        return redirect(url_for("login"))
     bl = Blacklist.query.filter_by(id=id, user_id=session["user_id"]).first()
     if bl:
         db.session.delete(bl)

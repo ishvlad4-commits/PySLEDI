@@ -11,6 +11,7 @@ class User(db.Model):
     password_hash = db.Column(db.String(255), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     subscription_end = db.Column(db.DateTime, nullable=True)
+    signal_url = db.Column(db.String(512), nullable=True)
 
     cameras = db.relationship(
         "Camera", backref="owner", lazy=True, cascade="all, delete-orphan"
@@ -37,6 +38,7 @@ class Camera(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
     name = db.Column(db.String(50), nullable=False)
     api_key = db.Column(db.String(100), unique=True, nullable=False)
+    source_type = db.Column(db.String(20), default="esp32")
     last_seen = db.Column(db.DateTime, default=datetime.utcnow)
     lat = db.Column(db.Float, nullable=True)
     lng = db.Column(db.Float, nullable=True)
