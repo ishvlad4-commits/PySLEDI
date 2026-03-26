@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Webcam Stream - СЛЕДИ (SLEDI)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800">
+    <nav class="bg-white shadow-sm border-b border-gray-200 sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center gap-4">
+                    <a href="{{ url_for('dashboard') }}" class="text-2xl font-extrabold text-purple-600 tracking-tight">СЛЕДИ</a>
+                    <span class="px-3 py-1 rounded-full bg-purple-50 text-purple-600 text-sm font-medium border border-purple-100">
+                        Webcam Mode
+                    </span>
+                </div>
+                <div class="flex items-center gap-4">
+                    <a href="{{ url_for('dashboard') }}" class="text-sm font-medium text-gray-500 hover:text-purple-600 transition">
+                        Back to Dashboard
+                    </a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <main class="max-w-3xl mx-auto px-4 py-8">
+        <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+            <div class="p-6 border-b border-gray-100 bg-gray-50/50">
+                <h2 class="text-xl font-bold text-gray-900">Stream from this device</h2>
+                <p class="text-sm text-gray-500 mt-1">Use your phone or laptop camera as a surveillance source.</p>
+            </div>
+            
+            <div class="p-6 space-y-6">
+                <div id="setup-section" class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Camera Name</label>
+                        <input type="text" id="camera-name" placeholder="E.g., Dashboard Cam, Phone Cam" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500">
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Select Camera</label>
+                        <select id="camera-select" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500">
+                            <option value="">Loading cameras...</option>
+                        </select>
+                    </div>
+
+                    <button id="btn-start" class="w-full bg-purple-600 hover:bg-purple-700 text-white font-medium py-3 px-4 rounded-lg transition shadow-sm flex items-center justify-center gap-2">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                        Start Streaming
+                    </button>
+                </div>
+
+                <div id="stream-section" class="hidden space-y-4">
+                    <div class="aspect-video bg-black rounded-lg overflow-hidden relative">
+                        <video id="video-preview" autoplay playsinline muted class="w-full h-full object-cover"></video>
+                        <div class="absolute top-4 right-4 bg-red-500 text-white text-xs font-bold px-3 py-1 rounded-full animate-pulse flex items-center gap-2">
+                            <span class="w-2 h-2 bg-white rounded-full"></span> LIVE
+                        </div>
+                        <div id="fps-counter" class="absolute bottom-4 left-4 bg-black/50 text-white text-xs px-2 py-1 rounded">
+                            FPS: --
+                        </div>
+                    </div>
+
+                    <div class="bg-blue-50 text-blue-800 p-4 rounded-lg text-sm border border-blue-100">
+                        <p class="font-medium mb-1">Streaming is active!</p>
+                        <p>Keep this tab open. If you close it or put your phone to sleep, the stream will stop.</p>
+                    </div>
+
+                    <button id="btn-stop" class="w-full bg-red-600 hover:bg-red-700 text-white font-medium py-3 px-4 rounded-lg transition shadow-sm">
+                        Stop Streaming
+                    </button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Hidden canvas for capturing frames -->
+    <canvas id="capture-canvas" class="hidden"></canvas>
+
+    <script>
+        const videoElement = document.getElementById('video-preview');
+        const cameraSelect = document.getElementById('camera-select');
+        const btnStart = document.getElementById('btn-start');
+        const btnStop = document.getElementById('btn-stop');
+        const setupSection = document.getElementById('setup-section');
+        const streamSection = document.getElementById('stream-section');
+        const cameraNameInput = document.getElementById('camera-name');
+        const fpsCounter = document.getElementById('fps-counter');
+        const canvas = document.getElementById('capture-canvas');
+        const ctx = canvas.getContext('2d');
+
+        let currentStream = null;
+        let streamingInterval = null;
+        let apiKey = null;
+        let framesSent = 0;
+        let lastFpsTime = Date.now();
+
+        // 1. Populate camera list
+        async function getCameras() {
+            try {
+                // Request permission first to get labels
+                await navigator.mediaDevices.getUserMedia({ video: true });
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const videoDevices = devices.filter(device => device.kind === 'videoinput');
+                
+                cameraSelect.innerHTML = '';
+                videoDevices.forEach((device, index) => {
+                    const option = document.createElement('option');
+                    option.value = device.deviceId;
+                    option.text = device.label || `Camera ${index + 1}`;
+                    cameraSelect.appendChild(option);
+                });
+            } catch (err) {
+                console.error("Error accessing media devices.", err);
+                cameraSelect.innerHTML = '<option value="">Error accessing cameras. Check permissions.</option>';
+            }
+        }
+
+        getCameras();
+
+        // 2. Start Streaming
+        btnStart.addEventListener('click', async () => {
+            const name = cameraNameInput.value.trim() || 'Webcam';
+            const deviceId = cameraSelect.value;
+
+            if (!deviceId) {
+                alert("Please select a camera first.");
+                return;
+            }
+
+            btnStart.disabled = true;
+            btnStart.innerHTML = 'Starting...';
+
+            try {
+                // A. Create camera via API
+                const resp = await fetch('/api/webcam/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: name })
+                });
+                
+                const data = await resp.json();
+                if (data.status !== 'success') {
+                    throw new Error(data.message || "Failed to create camera");
+                }
+                
+                apiKey = data.camera.api_key;
+
+                // B. Start local video stream
+                currentStream = await navigator.mediaDevices.getUserMedia({
+                    video: { deviceId: { exact: deviceId }, width: { ideal: 640 }, height: { ideal: 480 } }
+                });
+                videoElement.srcObject = currentStream;
+
+                // C. Switch UI
+                setupSection.classList.add('hidden');
+                streamSection.classList.remove('hidden');
+
+                // D. Start capture loop (Target ~30 FPS = 33ms)
+                videoElement.onloadedmetadata = () => {
+                    canvas.width = videoElement.videoWidth;
+                    canvas.height = videoElement.videoHeight;
+                    startCaptureLoop();
+                };
+
+            } catch (err) {
+                console.error("Start error:", err);
+                alert(err.message || "Could not start streaming.");
+                btnStart.disabled = false;
+                btnStart.innerHTML = 'Start Streaming';
+            }
+        });
+
+        // 3. Stop Streaming
+        btnStop.addEventListener('click', () => {
+            stopStreaming();
+            // Optional: redirect to dashboard
+            window.location.href = "{{ url_for('dashboard') }}";
+        });
+
+        function stopStreaming() {
+            if (streamingInterval) {
+                clearInterval(streamingInterval);
+                streamingInterval = null;
+            }
+            if (currentStream) {
+                currentStream.getTracks().forEach(track => track.stop());
+                currentStream = null;
+            }
+            videoElement.srcObject = null;
+        }
+
+        // 4. Capture and Send Loop
+        function startCaptureLoop() {
+            let isSending = false;
+            
+            streamingInterval = setInterval(async () => {
+                // Update FPS counter
+                framesSent++;
+                const now = Date.now();
+                if (now - lastFpsTime >= 1000) {
+                    fpsCounter.textContent = `FPS: ${framesSent}`;
+                    framesSent = 0;
+                    lastFpsTime = now;
+                }
+
+                if (isSending) return; // Avoid queuing up if network is slow
+
+                ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+                
+                // Get JPEG
+                canvas.toBlob(async (blob) => {
+                    if (!blob) return;
+                    
+                    isSending = true;
+                    const formData = new FormData();
+                    formData.append('image', blob, 'frame.jpg');
+                    formData.append('api_key', apiKey);
+                    
+                    try {
+                        await fetch('/stream_upload', {
+                            method: 'POST',
+                            body: formData
+                        });
+                    } catch (e) {
+                        console.error("Upload error", e);
+                    } finally {
+                        isSending = false;
+                    }
+                }, 'image/jpeg', 0.7); // 70% quality
+
+            }, 33); // ~30 FPS
+        }
+
+        // Cleanup on tab close
+        window.addEventListener('beforeunload', stopStreaming);
+    </script>
+</body>
+</html>

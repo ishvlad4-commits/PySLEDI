@@ -55,14 +55,22 @@
           {% endif %}
         {% endwith %}
 
-        <div class="mb-6 flex justify-between items-center">
+        <div class="mb-6 flex flex-wrap justify-between items-center gap-4">
             <h1 class="text-2xl font-bold text-gray-900">My Cameras / Мои камеры</h1>
-            <button onclick="openAddCameraModal()" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition shadow-sm flex items-center gap-2">
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
-                </svg>
-                Add Camera / Добавить камеру
-            </button>
+            <div class="flex gap-2">
+                <button onclick="openAddCameraModal()" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition shadow-sm flex items-center gap-2">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                    </svg>
+                    Add ESP32 Camera
+                </button>
+                <a href="{{ url_for('add_webcam') }}" class="bg-purple-600 hover:bg-purple-700 text-white font-medium py-2 px-4 rounded-lg transition shadow-sm flex items-center gap-2">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                    </svg>
+                    Use Device Camera
+                </a>
+            </div>
         </div>
 
         {% if cameras %}
@@ -199,6 +207,23 @@
                         <input type="text" name="pr_token" value="{{ pr_token }}" placeholder="YOUR_TOKEN_HERE" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm font-mono mb-4">
                         <button type="submit" class="w-full bg-gray-800 hover:bg-gray-900 text-white font-medium py-2 px-4 rounded-lg transition text-sm">
                             Save / Сохранить
+                        </button>
+                    </form>
+                </div>
+                
+                <div class="p-6 border-t border-gray-100">
+                    <h3 class="text-md font-bold text-gray-900 mb-2 flex items-center gap-2">
+                        <svg class="w-5 h-5 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"></path>
+                        </svg>
+                        Signal Webhook Alert
+                    </h3>
+                    <p class="text-sm text-gray-600 mb-4">Configure a Signal URL to receive alerts directly. Example: <code>https://api.callmebot.com/signal/send.php?phone=12345&apikey=6789=ALERTE+PLAQUE+{plate}</code></p>
+                    <form method="POST" action="{{ url_for('update_signal_url') }}">
+                        <label class="block text-xs font-medium text-gray-500 mb-1">Signal Webhook URL</label>
+                        <input type="text" name="signal_url" value="{{ signal_url or '' }}" placeholder="https://api.callmebot.com/signal/send.php?..." class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-sm font-mono mb-4">
+                        <button type="submit" class="w-full bg-purple-600 hover:bg-purple-700 text-white font-medium py-2 px-4 rounded-lg transition text-sm">
+                            Save Signal Webhook
                         </button>
                     </form>
                 </div>
