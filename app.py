@@ -172,10 +172,16 @@ def background_detection_loop(app):
                         continue
 
                     plates = car_cascade.detectMultiScale(
-                        img, scaleFactor=1.1, minNeighbors=4, minSize=(30, 30)
+                        img, scaleFactor=1.1, minNeighbors=7, minSize=(60, 20)
                     )
 
-                    if len(plates) > 0:
+                    valid_plates = 0
+                    for x, y, w, h in plates:
+                        aspect_ratio = w / float(h)
+                        if 2.0 <= aspect_ratio <= 6.0:
+                            valid_plates += 1
+
+                    if valid_plates > 0:
                         new_vlog = VehicleDetectionLog(
                             camera_id=camera_id, user_id=camera.user_id
                         )
@@ -188,17 +194,27 @@ def background_detection_loop(app):
                             headers = {"Authorization": f"Token {token}"}
 
                             try:
+                                print(
+                                    f"[BG Det] Sending image to Plate Recognizer API..."
+                                )
                                 response = requests.post(
                                     PLATE_RECOGNIZER_URL,
+                                    data={
+                                        "regions": "fr"
+                                    },  # Optimize for French/European plates
                                     files=files,
                                     headers=headers,
                                     timeout=5,
                                 )
+                                print(f"[BG Det] API Status: {response.status_code}")
                                 if response.status_code == 200:
                                     data = response.json()
                                     if data.get("results"):
                                         plate_read = data["results"][0]["plate"]
                                         normalized_read = normalize_plate(plate_read)
+                                        print(
+                                            f"[BG Det] Plate read successfully: {normalized_read}"
+                                        )
 
                                         new_plog = PlateDetectionLog(
                                             camera_id=camera_id,
