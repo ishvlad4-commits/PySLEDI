@@ -211,17 +211,9 @@
         const cameraId = {{ camera.id }};
         const apiKey = "{{ camera.api_key }}";
         let isStreaming = {{ 'true' if camera.is_streaming else 'false' }};
-        let retryCount = 0;
         
         document.getElementById('videoPlayer').onerror = function() {
-            if (retryCount < 3) {
-                retryCount++;
-                this.src = '/mjpeg_stream/' + cameraId + '?r=' + retryCount + '&t=' + Date.now();
-            }
-        };
-        
-        document.getElementById('videoPlayer').onload = function() {
-            retryCount = 0;
+            setTimeout(() => { this.src = '/mjpeg_stream/' + cameraId + '?t=' + Date.now(); }, 1000);
         };
 
         function toggleStream() {
