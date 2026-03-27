@@ -2,14 +2,28 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import requests
 import time
+import os
+from pathlib import Path
+
+
+def load_master_key():
+    env_path = Path(__file__).parent / ".env"
+    if env_path.exists():
+        with open(env_path) as f:
+            for line in f:
+                if line.startswith("MASTER_KEY="):
+                    return line.split("=", 1)[1].strip()
+    return None
+
 
 API_BASE_URL = "https://Wlansolo.pythonanywhere.com/api/admin/users"
-MASTER_KEY = "master_key_sledi_2024"
+MASTER_KEY = load_master_key() or "master_key_sledi_2024"
 MAX_RETRIES = 3
 RETRY_DELAY = 2
 
 
 def _make_request(method, url, **kwargs):
+    global MASTER_KEY
     kwargs.setdefault("timeout", (10, 60))
     kwargs.setdefault("headers", {"X-Master-Key": MASTER_KEY})
 
@@ -90,6 +104,16 @@ class AdminSlediApp:
             command=self.refresh_users,
         )
         btn_retry.pack(side=tk.LEFT, padx=5)
+
+        btn_edit_key = tk.Button(
+            btn_frame,
+            text="Change Master Key",
+            bg="#7c3aed",
+            fg="white",
+            relief=tk.FLAT,
+            command=self.change_master_key,
+        )
+        btn_edit_key.pack(side=tk.LEFT, padx=5)
 
         mid_frame = tk.Frame(self.root, bg="#0f172a", pady=20)
         mid_frame.pack(fill=tk.X, padx=20)
@@ -202,6 +226,51 @@ class AdminSlediApp:
         btn_add_year.pack(
             side=tk.RIGHT, ipadx=10, ipady=3, expand=True, fill=tk.X, padx=(5, 0)
         )
+
+    def change_master_key(self):
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Server Settings")
+        dialog.geometry("450x220")
+        dialog.configure(bg="#1e293b")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        tk.Label(dialog, text="Server API URL:", fg="#f8fafc", bg="#1e293b").pack(
+            pady=(15, 5)
+        )
+        entry_url = ttk.Entry(dialog, width=50)
+        entry_url.insert(0, API_BASE_URL.replace("/api/admin/users", ""))
+        entry_url.pack(pady=5)
+
+        tk.Label(dialog, text="Master Key:", fg="#f8fafc", bg="#1e293b").pack(
+            pady=(10, 5)
+        )
+        entry_key = ttk.Entry(dialog, width=50, show="*")
+        entry_key.pack(pady=5)
+
+        tk.Label(
+            dialog,
+            text="Settings apply to current session only",
+            fg="#94a3b8",
+            bg="#1e293b",
+            font=("Arial", 8),
+        ).pack()
+
+        def save_settings():
+            global MASTER_KEY, API_BASE_URL
+            new_key = entry_key.get().strip()
+            new_url = entry_url.get().strip().rstrip("/")
+            if new_key:
+                MASTER_KEY = new_key
+            if new_url:
+                API_BASE_URL = f"{new_url}/api/admin/users"
+            self.status_label.config(text="Settings updated for session", fg="#22c55e")
+            dialog.destroy()
+
+        btn_save = tk.Button(
+            dialog, text="Apply", bg="#2563eb", fg="white", command=save_settings
+        )
+        btn_save.pack(pady=15)
 
     def test_connection(self):
         self.status_label.config(text="Testing...", fg="#fbbf24")
